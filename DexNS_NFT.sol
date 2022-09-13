@@ -496,7 +496,7 @@ interface INFT {
 }
 
 abstract contract NFTReceiver {
-    function nftReceived(address _from, uint256 _tokenId, bytes calldata _data) external virtual;
+    function onERC721Received(address _from, uint256 _tokenId, bytes calldata _data) external virtual;
 }
 
 contract DexNS_NFT is INFT, Ownable {
@@ -578,7 +578,7 @@ contract DexNS_NFT is INFT, Ownable {
             _transfer(ownerOf(_tokenId), _bidder, _tokenId);
             if(address(_bidder).isContract())
             {
-                NFTReceiver(_bidder).nftReceived(ownerOf(_tokenId), _tokenId, hex"000000");
+                NFTReceiver(_bidder).onERC721Received(ownerOf(_tokenId), _tokenId, hex"000000");
             }
         }
     }
@@ -770,7 +770,7 @@ contract DexNS_NFT is INFT, Ownable {
         _transfer(msg.sender, _to, _tokenId);
         if(_to.isContract())
         {
-            NFTReceiver(_to).nftReceived(msg.sender, _tokenId, _data);
+            NFTReceiver(_to).onERC721Received(msg.sender, _tokenId, _data);
         }
         emit TransferData(_data);
         return true;
