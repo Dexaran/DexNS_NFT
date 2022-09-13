@@ -2,6 +2,8 @@
 
 pragma solidity ^0.8.0;
 
+import "https://github.com/Dexaran/CallistoNFT/blob/main/CallistoNFT.sol";
+
 /**
  * @dev Contract module which provides a basic access control mechanism, where
  * there is an account (an owner) that can be granted exclusive access to
@@ -434,29 +436,6 @@ library Strings {
     }
 }
 
-library Address {
-    /**
-     * @dev Returns true if `account` is a contract.
-     *
-     * This test is non-exhaustive, and there may be false-negatives: during the
-     * execution of a contract's constructor, its address will be reported as
-     * not containing a contract.
-     *
-     * > It is unsafe to assume that an address for which this function returns
-     * false is an externally-owned account (EOA) and not a contract.
-     */
-    function isContract(address account) internal view returns (bool) {
-        // This method relies in extcodesize, which returns 0 for contracts in
-        // construction, since the code is only stored at the end of the
-        // constructor execution.
-
-        uint256 size;
-        // solhint-disable-next-line no-inline-assembly
-        assembly { size := extcodesize(account) }
-        return size > 0;
-    }
-}
-
 interface INFT {
     
     struct Properties {
@@ -495,10 +474,6 @@ interface INFT {
     function withdrawBid(uint256 _tokenId) external returns (bool);
 }
 
-abstract contract NFTReceiver {
-    function onERC721Received(address _from, uint256 _tokenId, bytes calldata _data) external virtual;
-}
-
 contract DexNS_NFT is INFT, Ownable {
     
     using Address for address;
@@ -506,6 +481,7 @@ contract DexNS_NFT is INFT, Ownable {
     
     event Transfer     (address from, address to, uint256 tokenId);
     event TransferData (bytes data);
+    event TokenTrade   (uint256 indexed tokenID, address indexed new_owner, address indexed previous_owner, uint256 priceInWEI);
     
     mapping (uint256 => Properties) public _tokenProperties;
     mapping (uint32 => Fee)         public feeLevels; // level # => (fee receiver, fee percentage)
@@ -565,21 +541,23 @@ contract DexNS_NFT is INFT, Ownable {
         rewardPool = payable(msg.sender);
     }
     
+    // Reward is always paid based on BID
     modifier checkTrade(uint256 _tokenId)
     {
         _;
         (uint256 _bid, address payable _bidder,) = bidOf(_tokenId);
-        if(priceOf(_tokenId) <= _bid)
+        if(priceOf(_tokenId) > 0 && priceOf(_tokenId) <= _bid)
         {
             uint256 _reward = _bid - _claimFee(_bid, _tokenId);
+
+            emit TokenTrade(_tokenId, _bidder, ownerOf(_tokenId), _reward);
+
             payable(ownerOf(_tokenId)).transfer(_reward);
+
+            bytes memory _empty;
             delete _bids[_tokenId];
             delete _asks[_tokenId];
-            _transfer(ownerOf(_tokenId), _bidder, _tokenId);
-            if(address(_bidder).isContract())
-            {
-                NFTReceiver(_bidder).onERC721Received(ownerOf(_tokenId), _tokenId, hex"000000");
-            }
+            _transfer(ownerOf(_tokenId), _bidder, _tokenId, _empty );
         }
     }
     
@@ -667,7 +645,7 @@ contract DexNS_NFT is INFT, Ownable {
         }
         else
         {
-            _transfer(ownerOf(_DexNSname), _owner, _namehashIDs[_sig]);
+            _transfer(ownerOf(_DexNSname), _owner, _namehashIDs[_sig], hex"000000");
         }
         delete _tokenProperties[_namehashIDs[_sig]];
         // Fill new Name properties
@@ -765,20 +743,36 @@ contract DexNS_NFT is INFT, Ownable {
         return _symbol;
     }
     
-    function transfer(address _to, uint256 _tokenId, bytes calldata _data) public override returns (bool)
+    function transfer(address _to, uint256 _tokenId, bytes memory _data) public override returns (bool)
     {
-        _transfer(msg.sender, _to, _tokenId);
-        if(_to.isContract())
-        {
-            NFTReceiver(_to).onERC721Received(msg.sender, _tokenId, _data);
-        }
+        _transfer(msg.sender, _to, _tokenId, _data);
         emit TransferData(_data);
         return true;
     }
     
     function silentTransfer(address _to, uint256 _tokenId) public override returns (bool)
     {
-        _transfer(msg.sender, _to, _tokenId);
+        require(DexNS_NFT.ownerOf(_tokenId) == msg.sender, "NFT: transfer of token that is not own");
+        require(_to != address(0), "NFT: transfer to the zero address");
+        
+        _asks[_tokenId] = 0; // Zero out price on transfer
+        
+        // When a user transfers the NFT to another user
+        // it does not automatically mean that the new owner
+        // would like to sell this NFT at a price
+        // specified by the previous owner.
+        
+        // However bids persist regardless of token transfers
+        // because we assume that the bidder still wants to buy the NFT
+        // no matter from whom.
+
+        _beforeTokenTransfer(msg.sender, _to, _tokenId);
+
+        _balances[msg.sender] -= 1;
+        _balances[_to] += 1;
+        _owners[_tokenId] = _to;
+
+        emit Transfer(msg.sender, _to, _tokenId);
         return true;
     }
     
@@ -831,6 +825,41 @@ contract DexNS_NFT is INFT, Ownable {
     function _transfer(
         address from,
         address to,
+        uint256 tokenId,
+        bytes memory data
+    ) internal {
+        require(DexNS_NFT.ownerOf(tokenId) == from, "NFT: transfer of token that is not own");
+        require(to != address(0), "NFT: transfer to the zero address");
+        
+        _asks[tokenId] = 0; // Zero out price on transfer
+        
+        // When a user transfers the NFT to another user
+        // it does not automatically mean that the new owner
+        // would like to sell this NFT at a price
+        // specified by the previous owner.
+        
+        // However bids persist regardless of token transfers
+        // because we assume that the bidder still wants to buy the NFT
+        // no matter from whom.
+
+        _beforeTokenTransfer(from, to, tokenId);
+
+        _balances[from] -= 1;
+        _balances[to] += 1;
+        _owners[tokenId] = to;
+
+        if(to.isContract())
+        {
+            NFTReceiver(to).onERC721Received(msg.sender, msg.sender, tokenId, data);
+        }
+
+        emit Transfer(from, to, tokenId);
+    }
+
+    /*
+    function _transfer(
+        address from,
+        address to,
         uint256 tokenId
     ) internal virtual {
         require(DexNS_NFT.ownerOf(tokenId) == from, "NFT: transfer of token that is not own");
@@ -855,6 +884,7 @@ contract DexNS_NFT is INFT, Ownable {
 
         emit Transfer(from, to, tokenId);
     }
+    */
     
     function _beforeTokenTransfer(
         address from,
