@@ -850,7 +850,7 @@ contract DexNS_NFT is INFT, Ownable {
 
         if(to.isContract())
         {
-            NFTReceiver(to).onERC721Received(msg.sender, msg.sender, tokenId, data);
+            NFTReceiver(to).onERC721Received(msg.sender, from, tokenId, data);
         }
 
         emit Transfer(from, to, tokenId);
